@@ -15,6 +15,7 @@
         </div>
         
         <form method="POST" action="/setup_2fa">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <div class="mb-3">
                 <label for="otp" class="form-label">输入验证码</label>
                 <input type="text" class="form-control" id="otp" name="otp" required>
@@ -26,6 +27,7 @@
             您已启用双因素认证
         </div>
         <form method="POST" action="/disable_2fa">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <button type="submit" class="btn btn-danger">禁用2FA</button>
         </form>
         {% endif %}

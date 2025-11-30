@@ -1,5 +1,5 @@
 # Flask 远程打印服务
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, login_url
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_wtf import FlaskForm
@@ -12,7 +12,8 @@ import printer
 import os
 from models import db, User, RedemptionCode, PrintJob
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
+from flask_wtf.csrf import CSRFError
 import pyotp
 import qrcode
 import io
@@ -20,6 +21,15 @@ import base64
 
 app = Flask(__name__)
 csrf = CSRFProtect(app)
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    # 返回友好的错误信息；如果是JSON请求则返回JSON
+    if request.headers.get('Content-Type') == 'application/json':
+        return jsonify({"error": "CSRF token missing or invalid"}), 400
+    flash('CSRF 令牌缺失或无效，请重试', 'danger')
+    return redirect(request.referrer or url_for('login'))
 
 class LoginForm(FlaskForm):
     username = StringField('用户名', validators=[DataRequired()])
@@ -352,7 +362,7 @@ def verify_2fa():
     return render_template('verify_2fa.html', form=form)
 
 class ForgotPasswordForm(FlaskForm):
-    email = StringField('注册邮箱', validators=[DataRequired(), Email()])
+    identifier = StringField('用户名或注册邮箱', validators=[DataRequired()])
 
 class ResetPasswordForm(FlaskForm):
     new_password = PasswordField('新密码', validators=[DataRequired()])
@@ -402,7 +412,9 @@ def index():
 def forgot_password():
     form = ForgotPasswordForm()
     if form.validate_on_submit():
-        user = User.query.filter_by(username=form.email.data).first()
+        # 支持通过用户名或邮箱（目前模型仅有 username 字段）进行重置
+        identifier = form.identifier.data
+        user = User.query.filter_by(username=identifier).first()
         if user:
             # 生成重置令牌(示例，实际应使用更安全的方法)
             token = secrets.token_urlsafe(32)
