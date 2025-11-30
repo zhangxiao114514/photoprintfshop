@@ -1,0 +1,15 @@
+flask
+flask-wtf
+flask-login
+flask-sqlalchemy
+pillow
+PyPDF2
+pdf2image
+pyotp
+qrcode
+python-pptx
+python-docx
+# 可选（Windows COM 支持），建议在 Windows 环境下安装：
+# pywin32
+# 安装示例（虚拟环境下）:
+# & C:/Users/xiao/Desktop/1/.venv/Scripts/python.exe -m pip install pywin32

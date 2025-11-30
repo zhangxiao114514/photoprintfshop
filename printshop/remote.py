@@ -269,6 +269,21 @@ def handle_print():
             from PyPDF2 import PdfReader
             pages = len(PdfReader(filepath).pages)
             cost = pages * 0.5
+        elif ext in ['.ppt', '.pptx', '.doc', '.docx']:
+            # 尝试通过多种方式获取 Office 文档页/幻灯片数，若失败则按默认计价
+            pages = get_office_page_count(filepath, ext)
+            if pages is None:
+                print("获取Office文档页数失败或未安装依赖，按默认1页计价")
+                cost = 1.0
+                pages = 1
+            else:
+                cost = pages * 0.5
+        elif ext in ['.cpp', '.py', '.txt']:
+            # 代码文件按50行=1页计算
+            from printer import count_code_lines
+            lines = count_code_lines(filepath)
+            pages = max(1, lines // 50)  # 至少按1页计算
+            cost = pages * 0.5
         else:
             cost = 1.0
         
@@ -458,7 +473,7 @@ def health_check():
 
 # 配置
 UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'bmp', 'gif'}
+ALLOWED_EXTENSIONS = {'pdf', 'ppt', 'pptx', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'bmp', 'gif', 'cpp', 'py', 'txt'}
 API_KEY = "printshop123"
 
 # 确保上传目录存在
@@ -467,6 +482,54 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def get_office_page_count(filepath, ext):
+    """尝试多种方式获取 Office 文档的页/幻灯片数：
+    1. 首选 Windows COM (pywin32)；
+    2. 其次尝试 python-pptx / python-docx（若已安装）；
+    3. 最后返回 None，由调用方决定默认计价。
+    """
+    # 1) 使用 win32com（仅限 Windows，需安装 pywin32）
+    try:
+        from win32com.client import Dispatch
+        app = None
+        try:
+            if ext in ['.ppt', '.pptx']:
+                app = Dispatch('PowerPoint.Application')
+                pres = app.Presentations.Open(os.path.abspath(filepath))
+                pages = pres.Slides.Count
+                pres.Close()
+            else:
+                app = Dispatch('Word.Application')
+                doc = app.Documents.Open(os.path.abspath(filepath))
+                pages = doc.ComputeStatistics(2)  # wdStatisticPages
+                doc.Close()
+            return int(pages)
+        finally:
+            if app:
+                try:
+                    app.Quit()
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"win32com unavailable or failed: {e}")
+
+    # 2) 尝试 python-pptx / python-docx
+    try:
+        if ext in ['.ppt', '.pptx']:
+            from pptx import Presentation
+            prs = Presentation(filepath)
+            return len(prs.slides)
+        else:
+            # python-docx 无法直接获得页数，跳过
+            from docx import Document
+            # 不能可靠地获取页数，返回 None
+            return None
+    except Exception as e:
+        print(f"python-pptx/docx unavailable or failed: {e}")
+
+    return None
 
 def run_server(host='0.0.0.0', port=5000):
     app.run(host=host, port=port)
