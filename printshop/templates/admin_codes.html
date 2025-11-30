@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <h3>管理员 - 兑换码管理</h3>
+        <form method="POST" class="mb-4">
+            <div class="mb-3">
+                <label class="form-label">兑换码（留空自动生成）</label>
+                <input class="form-control" name="code">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">金额（元，选填）</label>
+                <input class="form-control" name="amount" placeholder="例如 10.0">
+            </div>
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="is_unlimited" name="is_unlimited">
+                <label class="form-check-label" for="is_unlimited">无限余额（勾选后忽略金额，使用后用户获得无限余额）</label>
+            </div>
+            <button class="btn btn-primary" type="submit">创建兑换码</button>
+        </form>
+
+        <h5>最近兑换码</h5>
+        <table class="table table-striped">
+            <thead>
+                <tr><th>代码</th><th>金额</th><th>无限</th><th>已使用</th><th>创建时间</th></tr>
+            </thead>
+            <tbody>
+                {% for c in codes %}
+                <tr>
+                    <td>{{ c.code }}</td>
+                    <td>{{ '¥%.2f'|format(c.amount) }}</td>
+                    <td>{{ '是' if c.is_unlimited else '否' }}</td>
+                    <td>{{ '是' if c.is_used else '否' }}</td>
+                    <td>{{ c.created_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

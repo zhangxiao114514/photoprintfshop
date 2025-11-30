@@ -30,6 +30,84 @@ Thumbs.db
 htmlcov/
 
 # Distribution / packaging
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+env/
+venv/
+.venv/
+.Python
+
+# Distribution / packaging
+build/
 dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.*
+
+# Database files
+*.db
+*.sqlite3
+printshop.db
+
+# Uploads, generated previews and OCR results
+uploads/
+static/uploads/
+static/ocr_results/
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints
+
+# MyPy / caches
+.mypy_cache/
+.pytype/
+
+# Secrets and keys
+secrets.json
+
+# Misc
+.python-version
+
+# Keep README, source and config tracked
+# (add other project-specific ignores below)
 build/
 *.egg-info/

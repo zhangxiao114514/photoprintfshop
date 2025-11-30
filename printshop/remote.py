@@ -49,7 +49,7 @@ with app.app_context():
     try:
         admin = User.query.filter_by(username='root').first()
         if not admin:
-            admin = User(username='root', password=generate_password_hash('123456'), balance=0.0, is_admin=True)
+            admin = User(username='root', password=generate_password_hash('123456'), balance=0.0, is_admin=True, has_unlimited=True)
             db.session.add(admin)
             db.session.commit()
             print('已创建默认管理员: root / 123456')
@@ -196,7 +196,11 @@ def redeem():
             flash('无效或已使用的兑换码', 'danger')
             return redirect(url_for('redeem'))
         
-        current_user.balance += redemption.amount
+        # 如果兑换码为无限余额，赋予用户无限权限
+        if getattr(redemption, 'is_unlimited', False):
+            current_user.has_unlimited = True
+        else:
+            current_user.balance += redemption.amount
         redemption.is_used = True
         redemption.used_by = current_user.id
         redemption.used_at = datetime.utcnow()
@@ -627,6 +631,32 @@ def admin_ocr_config():
     return render_template('admin_ocr_config.html', model=app.config.get('OCR_MODEL'), model_path=app.config.get('OCR_MODEL_PATH'))
 
 
+@app.route('/admin/codes', methods=['GET', 'POST'])
+@login_required
+def admin_codes():
+    if not current_user.is_admin:
+        flash('需要管理员权限', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        code = request.form.get('code') or secrets.token_hex(8).upper()
+        amount = request.form.get('amount')
+        is_unlimited = True if request.form.get('is_unlimited') == 'on' else False
+        try:
+            amt = float(amount) if amount and not is_unlimited else 0.0
+        except Exception:
+            amt = 0.0
+
+        new_code = RedemptionCode(code=code, amount=amt, is_unlimited=is_unlimited)
+        db.session.add(new_code)
+        db.session.commit()
+        flash(f'已创建兑换码 {new_code.code}', 'success')
+        return redirect(url_for('admin_codes'))
+
+    codes = RedemptionCode.query.order_by(desc(RedemptionCode.created_at)).limit(50).all()
+    return render_template('admin_codes.html', codes=codes)
+
+
 @app.route('/ocr', methods=['POST'])
 @login_required
 def handle_ocr():
@@ -684,8 +714,12 @@ def handle_ocr():
         else:
             return jsonify({'error': '不支持的文件类型进行 OCR'}), 400
 
-        cost = pages * app.config.get('OCR_PRICE_PER_PAGE', 1.0)
-        if current_user.balance < cost:
+        # 如果用户是无限余额用户，不扣费
+        price_per = app.config.get('OCR_PRICE_PER_PAGE', 1.0)
+        # 管理员或已被赋予无限权限的用户不扣费
+        is_unlimited_user = getattr(current_user, 'has_unlimited', False) or getattr(current_user, 'is_admin', False)
+        cost = 0.0 if is_unlimited_user else pages * price_per
+        if not is_unlimited_user and current_user.balance < cost:
             return jsonify({'error': 'Insufficient balance'}), 402
 
         # 扣费并保存任务，同时把 OCR 结果写入静态文件以便下载
