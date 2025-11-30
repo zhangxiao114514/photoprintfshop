@@ -1,0 +1,417 @@
+# Flask 远程打印服务
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user, login_url
+from flask_wtf.csrf import CSRFProtect, generate_csrf
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField
+from wtforms.validators import DataRequired
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from sqlalchemy import desc
+import printer
+import os
+from models import db, User, RedemptionCode, PrintJob
+import secrets
+from datetime import datetime
+import pyotp
+import qrcode
+import io
+import base64
+
+app = Flask(__name__)
+csrf = CSRFProtect(app)
+
+class LoginForm(FlaskForm):
+    username = StringField('用户名', validators=[DataRequired()])
+    password = PasswordField('密码', validators=[DataRequired()])
+
+class Verify2FAForm(FlaskForm):
+    otp = StringField('验证码', validators=[DataRequired()])
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///printshop.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = secrets.token_hex(16)
+
+# 初始化数据库
+db.init_app(app)
+with app.app_context():
+    db.create_all()
+
+# 初始化登录管理
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+def is_json_request():
+    return request.headers.get('Content-Type') == 'application/json'
+
+# 用户认证路由
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if not user or not check_password_hash(user.password, form.password.data):
+            flash('用户名或密码错误', 'danger')
+            return redirect(url_for('login'))
+        
+        login_user(user)
+        if user.is_2fa_enabled:
+            session['user_id'] = user.id
+            logout_user()
+            return redirect(url_for('verify_2fa'))
+        return redirect(url_for('dashboard'))
+    
+    if is_json_request() and request.method == 'POST':
+        data = request.get_json()
+        user = User.query.filter_by(username=data.get('username')).first()
+        if not user or not check_password_hash(user.password, data.get('password')):
+            return jsonify({"error": "Invalid username or password"}), 401
+        login_user(user)
+        return jsonify({"status": "success", "user_id": user.id})
+    
+    return render_template('login.html', form=form)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        try:
+            data = request.form if not is_json_request() else request.get_json()
+            
+            if not data.get('username') or not data.get('password'):
+                if is_json_request():
+                    return jsonify({"error": "Username and password required"}), 400
+                flash('用户名和密码不能为空', 'danger')
+                return redirect(url_for('register'))
+            
+            if User.query.filter_by(username=data['username']).first():
+                if is_json_request():
+                    return jsonify({"error": "Username already exists"}), 400
+                flash('用户名已存在', 'danger')
+                return redirect(url_for('register'))
+            
+            user = User(
+                username=data['username'],
+                password=generate_password_hash(data['password']),
+                balance=0.0
+            )
+            db.session.add(user)
+            db.session.commit()
+            
+            if is_json_request():
+                return jsonify({"status": "success", "user_id": user.id})
+            flash('注册成功，请登录', 'success')
+            return redirect(url_for('login'))
+        except Exception as e:
+            db.session.rollback()
+            if is_json_request():
+                return jsonify({"error": str(e)}), 500
+            flash(f'注册失败: {str(e)}', 'danger')
+            return redirect(url_for('register'))
+    
+    return render_template('register.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    if is_json_request():
+        return jsonify({"status": "success"})
+    return redirect(url_for('login'))
+
+# 用户功能路由
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    recent_jobs = PrintJob.query.filter_by(user_id=current_user.id)\
+        .order_by(desc(PrintJob.created_at))\
+        .limit(5)\
+        .all()
+    return render_template('dashboard.html', recent_jobs=recent_jobs)
+
+@app.route('/redeem', methods=['GET', 'POST'])
+@login_required
+def redeem():
+    if request.method == 'POST':
+        code = request.form.get('code') if not is_json_request() else request.get_json().get('code')
+        redemption = RedemptionCode.query.filter_by(code=code, is_used=False).first()
+        
+        if not redemption:
+            if is_json_request():
+                return jsonify({"error": "Invalid or used code"}), 400
+            flash('无效或已使用的兑换码', 'danger')
+            return redirect(url_for('redeem'))
+        
+        current_user.balance += redemption.amount
+        redemption.is_used = True
+        redemption.used_by = current_user.id
+        redemption.used_at = datetime.utcnow()
+        db.session.commit()
+        
+        if is_json_request():
+            return jsonify({"status": "success", "new_balance": current_user.balance})
+        flash(f'成功充值 ¥{redemption.amount:.2f}', 'success')
+        return redirect(url_for('redeem'))
+    
+    return render_template('redeem.html')
+
+@app.route('/history')
+@login_required
+def print_history():
+    page = request.args.get('page', 1, type=int)
+    search = request.args.get('search', '')
+    start_date = request.args.get('start_date', '')
+    end_date = request.args.get('end_date', '')
+
+    query = PrintJob.query.filter_by(user_id=current_user.id)
+    if search: query = query.filter(PrintJob.file_name.contains(search))
+    if start_date: query = query.filter(PrintJob.created_at >= start_date)
+    if end_date: query = query.filter(PrintJob.created_at <= end_date + ' 23:59:59')
+    
+    print_jobs = query.order_by(desc(PrintJob.created_at)).paginate(page=page, per_page=10)
+    return render_template('history.html', print_jobs=print_jobs)
+
+# 管理员API
+@app.route('/admin/generate_code', methods=['POST'])
+def generate_code():
+    if request.headers.get('X-API-KEY') != API_KEY:
+        return jsonify({"error": "Invalid API key"}), 401
+    
+    data = request.get_json()
+    code = RedemptionCode(
+        code=secrets.token_hex(8).upper(),
+        amount=data.get('amount', 10.0)
+    )
+    db.session.add(code)
+    db.session.commit()
+    return jsonify({"code": code.code, "amount": code.amount})
+
+# 打印功能
+@app.route('/print', methods=['POST'])
+@login_required
+def handle_print():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({"error": "File type not allowed"}), 400
+        
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        # 计算费用
+        ext = os.path.splitext(filename)[1].lower()
+        if ext == '.pdf':
+            from PyPDF2 import PdfReader
+            pages = len(PdfReader(filepath).pages)
+            cost = pages * 0.5
+        else:
+            cost = 1.0
+        
+        if current_user.balance < cost:
+            raise ValueError("Insufficient balance")
+        
+        # 打印文件
+        printer_name = request.form.get('printer_name', None)
+        if not printer.print_file(filepath, printer_name):
+            raise ValueError("Print failed")
+        
+        # 记录打印任务
+        current_user.balance -= cost
+        job = PrintJob(
+            user_id=current_user.id,
+            file_name=filename,
+            pages=pages if ext == '.pdf' else 1,
+            cost=cost,
+            status='completed'
+        )
+        db.session.add(job)
+        db.session.commit()
+        
+        return jsonify({
+            "status": "success", 
+            "cost": cost,
+            "balance": current_user.balance
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+# 系统路由
+@app.route('/setup_2fa', methods=['GET', 'POST'])
+@login_required
+def setup_2fa():
+    if request.method == 'POST':
+        otp = request.form.get('otp')
+        if not otp or not current_user.otp_secret:
+            flash('无效请求', 'danger')
+            return redirect(url_for('setup_2fa'))
+        
+        totp = pyotp.TOTP(current_user.otp_secret)
+        if not totp.verify(otp):
+            flash('验证码错误', 'danger')
+            return redirect(url_for('setup_2fa'))
+        
+        current_user.is_2fa_enabled = True
+        db.session.commit()
+        flash('2FA已成功启用', 'success')
+        return redirect(url_for('dashboard'))
+    
+    if not current_user.otp_secret:
+        current_user.otp_secret = pyotp.random_base32()
+        db.session.commit()
+    
+    totp = pyotp.TOTP(current_user.otp_secret)
+    uri = totp.provisioning_uri(name=current_user.username, issuer_name="打印店系统")
+    
+    # 生成QR码
+    img = qrcode.make(uri)
+    buffered = io.BytesIO()
+    img.save(buffered)
+    qr_code_url = "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
+    
+    return render_template('setup_2fa.html', 
+                         qr_code_url=qr_code_url,
+                         secret=current_user.otp_secret)
+
+@app.route('/verify_2fa', methods=['GET', 'POST'])
+def verify_2fa():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    
+    form = Verify2FAForm()
+    if form.validate_on_submit():
+        totp = pyotp.TOTP(user.otp_secret)
+        if totp.verify(form.otp.data):
+            session.pop('user_id', None)
+            login_user(user)
+            return redirect(url_for('dashboard'))
+        flash('验证码错误', 'danger')
+    
+    return render_template('verify_2fa.html', form=form)
+
+class ForgotPasswordForm(FlaskForm):
+    email = StringField('注册邮箱', validators=[DataRequired(), Email()])
+
+class ResetPasswordForm(FlaskForm):
+    new_password = PasswordField('新密码', validators=[DataRequired()])
+    confirm_password = PasswordField('确认新密码', validators=[DataRequired()])
+
+class ChangePasswordForm(FlaskForm):
+    current_password = PasswordField('当前密码', validators=[DataRequired()])
+    new_password = PasswordField('新密码', validators=[DataRequired()])
+    confirm_password = PasswordField('确认新密码', validators=[DataRequired()])
+
+@app.route('/change_password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    form = ChangePasswordForm()
+    if form.validate_on_submit():
+        if not check_password_hash(current_user.password, form.current_password.data):
+            flash('当前密码错误', 'danger')
+            return redirect(url_for('change_password'))
+        
+        if form.new_password.data != form.confirm_password.data:
+            flash('新密码不匹配', 'danger')
+            return redirect(url_for('change_password'))
+            
+        current_user.password = generate_password_hash(form.new_password.data)
+        db.session.commit()
+        flash('密码已成功修改', 'success')
+        return redirect(url_for('dashboard'))
+    
+    return render_template('change_password.html', form=form)
+
+@app.route('/disable_2fa', methods=['POST'])
+@login_required
+def disable_2fa():
+    current_user.otp_secret = None
+    current_user.is_2fa_enabled = False
+    db.session.commit()
+    flash('2FA已禁用', 'success')
+    return redirect(url_for('dashboard'))
+
+@app.route('/')
+def index():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('login'))
+
+@app.route('/forgot_password', methods=['GET', 'POST'])
+def forgot_password():
+    form = ForgotPasswordForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.email.data).first()
+        if user:
+            # 生成重置令牌(示例，实际应使用更安全的方法)
+            token = secrets.token_urlsafe(32)
+            user.reset_token = token
+            user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+            db.session.commit()
+            
+            # 这里应该发送邮件，示例中仅打印到控制台
+            reset_url = url_for('reset_password', token=token, _external=True)
+            print(f"密码重置链接: {reset_url}")  # 实际应用中应发送邮件
+            flash('如果该邮箱已注册，已发送重置链接', 'success')
+        else:
+            # 防止用户枚举攻击，无论用户是否存在都显示相同消息
+            flash('如果该邮箱已注册，已发送重置链接', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('forgot_password.html', form=form)
+
+@app.route('/reset_password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    user = User.query.filter_by(reset_token=token).first()
+    
+    if not user or user.reset_token_expires < datetime.utcnow():
+        flash('无效或过期的重置链接', 'danger')
+        return redirect(url_for('login'))
+    
+    form = ResetPasswordForm()
+    if form.validate_on_submit():
+        user.password = generate_password_hash(form.new_password.data)
+        user.reset_token = None
+        user.reset_token_expires = None
+        db.session.commit()
+        flash('密码已重置，请使用新密码登录', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('reset_password.html', form=form, token=token)
+
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "running", "service": "printshop"})
+
+# 配置
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'bmp', 'gif'}
+API_KEY = "printshop123"
+
+# 确保上传目录存在
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def run_server(host='0.0.0.0', port=5000):
+    app.run(host=host, port=port)
+
+if __name__ == '__main__':
+    run_server()

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>用户信息</h5>
+            </div>
+            <div class="card-body">
+                <p><strong>用户名:</strong> {{ current_user.username }}</p>
+                <p><strong>余额:</strong> ¥{{ "%.2f"|format(current_user.balance) }}</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h5>快速操作</h5>
+            </div>
+            <div class="card-body">
+                <form action="/print" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="mb-3">
+                        <input type="file" name="file" class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">打印文件</button>
+                </form>
+                <a href="/change_password" class="btn btn-warning mb-2">修改密码</a>
+                <a href="/setup_2fa" class="btn btn-secondary mb-2">设置2FA</a>
+                <a href="/redeem" class="btn btn-success mb-2">兑换码充值</a>
+                <a href="/history" class="btn btn-info">打印历史</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5>最近打印任务</h5>
+            </div>
+            <div class="card-body">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>页数</th>
+                            <th>费用</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in recent_jobs %}
+                        <tr>
+                            <td>{{ job.file_name }}</td>
+                            <td>{{ job.pages }}</td>
+                            <td>¥{{ "%.2f"|format(job.cost) }}</td>
+                            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

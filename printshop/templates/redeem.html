@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>当前余额: ¥{{ "%.2f"|format(current_user.balance) }}</h5>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h5>使用兑换码</h5>
+            </div>
+            <div class="card-body">
+        <form method="POST" action="/redeem">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="mb-3">
+                <label for="code" class="form-label">兑换码</label>
+                <input type="text" class="form-control" id="code" name="code" required>
+            </div>
+            <button type="submit" class="btn btn-success">兑换</button>
+        </form>
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }} mt-3">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

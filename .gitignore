@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env
+
+# Database
+*.db
+*.sqlite
+
+# Uploads
+uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# System
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/

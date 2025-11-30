@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h2 class="mb-4">打印历史记录</h2>
+    
+    <div class="card mb-4">
+        <div class="card-body">
+            <form class="row g-3">
+                <div class="col-md-4">
+                    <label for="search" class="form-label">搜索文件名</label>
+                    <input type="text" class="form-control" id="search" name="search" value="{{ request.args.get('search', '') }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="start_date" class="form-label">开始日期</label>
+                    <input type="date" class="form-control" id="start_date" name="start_date" value="{{ request.args.get('start_date', '') }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="end_date" class="form-label">结束日期</label>
+                    <input type="date" class="form-control" id="end_date" name="end_date" value="{{ request.args.get('end_date', '') }}">
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">筛选</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>页数</th>
+                            <th>费用</th>
+                            <th>状态</th>
+                            <th>打印时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in print_jobs.items %}
+                        <tr>
+                            <td>{{ job.file_name }}</td>
+                            <td>{{ job.pages }}</td>
+                            <td>¥{{ "%.2f"|format(job.cost) }}</td>
+                            <td>{{ job.status }}</td>
+                            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <nav aria-label="Page navigation" class="mt-4">
+                <ul class="pagination justify-content-center">
+                    {% if print_jobs.has_prev %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('print_history', page=print_jobs.prev_num, search=request.args.get('search', ''), start_date=request.args.get('start_date', ''), end_date=request.args.get('end_date', '')) }}">上一页</a>
+                    </li>
+                    {% endif %}
+
+                    {% for page_num in print_jobs.iter_pages() %}
+                        {% if page_num %}
+                            <li class="page-item {% if page_num == print_jobs.page %}active{% endif %}">
+                                <a class="page-link" href="{{ url_for('print_history', page=page_num, search=request.args.get('search', ''), start_date=request.args.get('start_date', ''), end_date=request.args.get('end_date', '')) }}">{{ page_num }}</a>
+                            </li>
+                        {% else %}
+                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                        {% endif %}
+                    {% endfor %}
+
+                    {% if print_jobs.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('print_history', page=print_jobs.next_num, search=request.args.get('search', ''), start_date=request.args.get('start_date', ''), end_date=request.args.get('end_date', '')) }}">下一页</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+    </div>
+
+    <div class="mt-3">
+        <a href="/dashboard" class="btn btn-secondary">返回仪表盘</a>
+    </div>
+</div>
+{% endblock %}
