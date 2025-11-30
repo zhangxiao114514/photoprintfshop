@@ -58,3 +58,18 @@ class PrintJob(db.Model):
     
     def __repr__(self):
         return f'<PrintJob {self.file_name}>'
+
+
+class OcrJob(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    file_name = db.Column(db.String(120), nullable=False)
+    pages = db.Column(db.Integer, nullable=False)
+    cost = db.Column(db.Float, nullable=False)
+    result_text = db.Column(db.Text, nullable=True)
+    result_file = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(20), default='pending')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<OcrJob {self.file_name}>'

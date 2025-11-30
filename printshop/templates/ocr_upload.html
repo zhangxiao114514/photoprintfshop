@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <h3>OCR 文本识别</h3>
+        <p>每页 <strong>¥{{ price }}</strong>，当前余额：<strong>¥{{ current_user.balance }}</strong></p>
+        <form method="POST" action="/ocr" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="mb-3">
+                <label class="form-label">选择文件（图片、PDF、PPTX）</label>
+                <input class="form-control" type="file" name="file" required>
+            </div>
+            <button class="btn btn-primary" type="submit">上传并识别</button>
+        </form>
+        <div class="mt-4">
+            <a href="/dashboard" class="btn btn-secondary">返回</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

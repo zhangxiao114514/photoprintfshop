@@ -28,7 +28,15 @@
         </div>
         <form method="POST" action="/disable_2fa">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-            <button type="submit" class="btn btn-danger">禁用2FA</button>
+            <div class="mb-3">
+                <label for="current_password" class="form-label">当前密码</label>
+                <input type="password" class="form-control" id="current_password" name="current_password" required>
+            </div>
+            <div class="mb-3">
+                <label for="otp_disable" class="form-label">输入OTP验证码</label>
+                <input type="text" class="form-control" id="otp_disable" name="otp_disable" required>
+            </div>
+            <button type="submit" class="btn btn-danger">确认禁用2FA</button>
         </form>
         {% endif %}
     </div>

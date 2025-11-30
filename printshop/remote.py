@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 from sqlalchemy import desc
 import printer
 import os
-from models import db, User, RedemptionCode, PrintJob
+from models import db, User, RedemptionCode, PrintJob, OcrJob
 import secrets
 from datetime import datetime, timedelta
 from flask_wtf.csrf import CSRFError
@@ -45,6 +45,23 @@ app.config['SECRET_KEY'] = secrets.token_hex(16)
 db.init_app(app)
 with app.app_context():
     db.create_all()
+    # 创建默认管理员（如果不存在）
+    try:
+        admin = User.query.filter_by(username='root').first()
+        if not admin:
+            admin = User(username='root', password=generate_password_hash('123456'), balance=0.0, is_admin=True)
+            db.session.add(admin)
+            db.session.commit()
+            print('已创建默认管理员: root / 123456')
+    except Exception as e:
+        db.session.rollback()
+        print(f'创建管理员失败: {e}')
+    # 确保 OCR 结果目录存在
+    os.makedirs(os.path.join('static', 'ocr_results'), exist_ok=True)
+# OCR 配置
+app.config['OCR_MODEL'] = 'minerU'  # 默认使用 minerU（需在后台配置可执行路径或API）
+app.config['OCR_MODEL_PATH'] = None  # minerU 可执行文件或服务的路径/URL
+app.config['OCR_PRICE_PER_PAGE'] = 1.0  # 每页 1 元
 
 # 初始化登录管理
 login_manager = LoginManager()
@@ -56,6 +73,31 @@ def load_user(user_id):
 
 def is_json_request():
     return request.headers.get('Content-Type') == 'application/json'
+
+
+def ocr_process_image(image_path):
+    """对单张图片执行 OCR，优先使用 minerU（通过可执行路径或API），否则尝试 pytesseract（若安装）。返回识别到的文本。"""
+    model = app.config.get('OCR_MODEL')
+    model_path = app.config.get('OCR_MODEL_PATH')
+    # minerU 调用（示例：假设 minerU 可执行文件接受文件路径并输出文本）
+    if model == 'minerU' and model_path:
+        try:
+            import subprocess
+            res = subprocess.run([model_path, image_path], capture_output=True, text=True, check=True)
+            return res.stdout.strip()
+        except Exception as e:
+            print(f'minerU OCR 调用失败: {e}')
+
+    # 回退到 pytesseract
+    try:
+        from PIL import Image
+        import pytesseract
+        text = pytesseract.image_to_string(Image.open(image_path), lang='chi_sim+eng')
+        return text
+    except Exception as e:
+        print(f'pytesseract OCR 不可用或失败: {e}')
+
+    raise RuntimeError('未配置可用的 OCR 引擎（minerU 或 pytesseract）')
 
 # 用户认证路由
 @app.route('/login', methods=['GET', 'POST'])
@@ -212,10 +254,17 @@ def generate_preview(file):
         # PDF预览
         if filename.lower().endswith('.pdf'):
             from PyPDF2 import PdfReader
-            from pdf2image import convert_from_path
-            images = convert_from_path(filepath, first_page=1, last_page=1)
+            try:
+                from pdf2image import convert_from_path
+                images = convert_from_path(filepath, first_page=1, last_page=1)
+            except Exception:
+                images = []
             preview_path = os.path.join(UPLOAD_FOLDER, f"preview_{os.path.splitext(filename)[0]}.jpg")
-            images[0].save(preview_path, 'JPEG')
+            if images:
+                images[0].save(preview_path, 'JPEG')
+            else:
+                # 无法生成 PDF 预览，则使用空占位图或返回 None
+                return None
             return preview_path
         
         # 图片预览 (直接使用原图)
@@ -411,6 +460,26 @@ def change_password():
 @app.route('/disable_2fa', methods=['POST'])
 @login_required
 def disable_2fa():
+    # 强化：要求当前密码 + OTP
+    current_pwd = request.form.get('current_password')
+    otp = request.form.get('otp_disable')
+    if not current_pwd or not otp:
+        flash('请提供当前密码和 OTP', 'danger')
+        return redirect(url_for('setup_2fa'))
+
+    if not check_password_hash(current_user.password, current_pwd):
+        flash('当前密码错误', 'danger')
+        return redirect(url_for('setup_2fa'))
+
+    if not current_user.otp_secret:
+        flash('未配置 OTP', 'danger')
+        return redirect(url_for('setup_2fa'))
+
+    totp = pyotp.TOTP(current_user.otp_secret)
+    if not totp.verify(otp):
+        flash('OTP 验证失败', 'danger')
+        return redirect(url_for('setup_2fa'))
+
     current_user.otp_secret = None
     current_user.is_2fa_enabled = False
     db.session.commit()
@@ -518,16 +587,18 @@ def get_office_page_count(filepath, ext):
     # 2) 尝试 python-pptx / python-docx
     try:
         if ext in ['.ppt', '.pptx']:
-            from pptx import Presentation
-            prs = Presentation(filepath)
-            return len(prs.slides)
+            try:
+                from pptx import Presentation
+                prs = Presentation(filepath)
+                return len(prs.slides)
+            except Exception as e:
+                print(f"python-pptx unavailable or failed: {e}")
+                return None
         else:
-            # python-docx 无法直接获得页数，跳过
-            from docx import Document
-            # 不能可靠地获取页数，返回 None
+            # python-docx 无法可靠地获取页数，故返回 None
             return None
     except Exception as e:
-        print(f"python-pptx/docx unavailable or failed: {e}")
+        print(f"office page count fallback failed: {e}")
 
     return None
 
@@ -536,3 +607,104 @@ def run_server(host='0.0.0.0', port=5000):
 
 if __name__ == '__main__':
     run_server()
+
+
+@app.route('/admin/ocr_config', methods=['GET', 'POST'])
+@login_required
+def admin_ocr_config():
+    if not current_user.is_admin:
+        flash('需要管理员权限', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        model = request.form.get('model')
+        model_path = request.form.get('model_path')
+        app.config['OCR_MODEL'] = model or app.config.get('OCR_MODEL')
+        app.config['OCR_MODEL_PATH'] = model_path or app.config.get('OCR_MODEL_PATH')
+        flash('OCR 配置已更新', 'success')
+        return redirect(url_for('admin_ocr_config'))
+
+    return render_template('admin_ocr_config.html', model=app.config.get('OCR_MODEL'), model_path=app.config.get('OCR_MODEL_PATH'))
+
+
+@app.route('/ocr', methods=['POST'])
+@login_required
+def handle_ocr():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed'}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    try:
+        ext = os.path.splitext(filename)[1].lower()
+        pages = 1
+        text_output = ''
+        # 图片直接 OCR
+        if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.gif']:
+            pages = 1
+            text_output = ocr_process_image(filepath)
+        elif ext == '.pdf':
+            # 尝试将 PDF 每页转为图片并 OCR（需要 pdf2image + poppler）
+            try:
+                from pdf2image import convert_from_path
+                images = convert_from_path(filepath)
+                pages = len(images)
+                texts = []
+                for i, img in enumerate(images):
+                    tmp = os.path.join(UPLOAD_FOLDER, f'_ocr_page_{i}.png')
+                    img.save(tmp, 'PNG')
+                    texts.append(ocr_process_image(tmp))
+                    os.remove(tmp)
+                text_output = '\n'.join(texts)
+            except Exception as e:
+                return jsonify({'error': f'PDF OCR 失败: {e}'}), 500
+        elif ext in ['.ppt', '.pptx']:
+            # 尝试提取 ppt 文本（使用 python-pptx），若不可用则返回错误
+            try:
+                from pptx import Presentation
+                prs = Presentation(filepath)
+                pages = len(prs.slides)
+                texts = []
+                for slide in prs.slides:
+                    slide_text = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, 'text'):
+                            slide_text.append(shape.text)
+                    texts.append('\n'.join(slide_text))
+                text_output = '\n\n'.join(texts)
+            except Exception as e:
+                return jsonify({'error': f'PPTX 文本提取失败: {e}'}), 500
+        else:
+            return jsonify({'error': '不支持的文件类型进行 OCR'}), 400
+
+        cost = pages * app.config.get('OCR_PRICE_PER_PAGE', 1.0)
+        if current_user.balance < cost:
+            return jsonify({'error': 'Insufficient balance'}), 402
+
+        # 扣费并保存任务，同时把 OCR 结果写入静态文件以便下载
+        current_user.balance -= cost
+        # 生成唯一文件名并保存文本结果
+        result_fname = f'ocr_{secrets.token_hex(8)}.txt'
+        result_path = os.path.join('static', 'ocr_results', result_fname)
+        with open(result_path, 'w', encoding='utf-8') as f:
+            f.write(text_output)
+
+        job = OcrJob(user_id=current_user.id, file_name=filename, pages=pages, cost=cost, result_text=text_output, result_file=result_fname, status='completed')
+        db.session.add(job)
+        db.session.commit()
+
+        download_url = url_for('static', filename=f'ocr_results/{result_fname}', _external=True)
+        return jsonify({'status': 'success', 'pages': pages, 'cost': cost, 'text': text_output, 'download_url': download_url})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)

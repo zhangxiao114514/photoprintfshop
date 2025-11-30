@@ -13,3 +13,5 @@ python-docx
 # pywin32
 # 安装示例（虚拟环境下）:
 # & C:/Users/xiao/Desktop/1/.venv/Scripts/python.exe -m pip install pywin32
+pytesseract  # 如果你希望使用 Tesseract 作为后备 OCR
+# minerU: 自定义 OCR 模型/服务，请安装或配置 minerU 的可执行文件或服务地址，并在后台配置页面填写路径/URL
