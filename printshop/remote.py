@@ -4,7 +4,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField
-from wtforms.validators import DataRequired
+from wtforms.validators import DataRequired, Email
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from sqlalchemy import desc
@@ -27,7 +27,7 @@ class LoginForm(FlaskForm):
 
 class Verify2FAForm(FlaskForm):
     otp = StringField('验证码', validators=[DataRequired()])
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///printshop.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.path.abspath(os.path.dirname(__file__)), 'printshop.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = secrets.token_hex(16)
 
@@ -189,6 +189,52 @@ def generate_code():
     return jsonify({"code": code.code, "amount": code.amount})
 
 # 打印功能
+def generate_preview(file):
+    """生成文件预览"""
+    if not allowed_file(file.filename):
+        return None
+        
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, f"preview_{filename}")
+    file.save(filepath)
+    
+    try:
+        # PDF预览
+        if filename.lower().endswith('.pdf'):
+            from PyPDF2 import PdfReader
+            from pdf2image import convert_from_path
+            images = convert_from_path(filepath, first_page=1, last_page=1)
+            preview_path = os.path.join(UPLOAD_FOLDER, f"preview_{os.path.splitext(filename)[0]}.jpg")
+            images[0].save(preview_path, 'JPEG')
+            return preview_path
+        
+        # 图片预览 (直接使用原图)
+        return filepath
+    except Exception as e:
+        print(f"生成预览失败: {str(e)}")
+        return None
+    finally:
+        if os.path.exists(filepath) and filepath.endswith('.pdf'):
+            os.remove(filepath)
+
+@app.route('/preview', methods=['POST'])
+@login_required
+def handle_preview():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    preview_path = generate_preview(file)
+    if not preview_path:
+        return jsonify({"error": "Preview generation failed"}), 400
+    
+    # 返回预览图片URL
+    preview_url = url_for('static', filename=f'uploads/{os.path.basename(preview_path)}', _external=True)
+    return jsonify({"preview_url": preview_url})
+
 @app.route('/print', methods=['POST'])
 @login_required
 def handle_print():

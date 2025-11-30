@@ -3,62 +3,122 @@
 {% block content %}
 <div class="row">
     <div class="col-md-4">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5>用户信息</h5>
+        <div class="card mb-4 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-person-badge me-2"></i>用户信息</h5>
             </div>
             <div class="card-body">
-                <p><strong>用户名:</strong> {{ current_user.username }}</p>
-                <p><strong>余额:</strong> ¥{{ "%.2f"|format(current_user.balance) }}</p>
+                <div class="d-flex align-items-center mb-3">
+                    <i class="bi bi-person-circle fs-4 me-3 text-primary"></i>
+                    <div>
+                        <h6 class="mb-0">用户名</h6>
+                        <p class="text-muted mb-0">{{ current_user.username }}</p>
+                    </div>
+                </div>
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-wallet2 fs-4 me-3 text-success"></i>
+                    <div>
+                        <h6 class="mb-0">账户余额</h6>
+                        <p class="text-muted mb-0">¥{{ "%.2f"|format(current_user.balance) }}</p>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="card">
-            <div class="card-header">
-                <h5>快速操作</h5>
+        <div class="card shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-lightning-charge me-2"></i>快速操作</h5>
             </div>
             <div class="card-body">
-                <form action="/print" method="POST" enctype="multipart/form-data">
+                <form action="/print" method="POST" enctype="multipart/form-data" id="printForm">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-3">
-                        <input type="file" name="file" class="form-control" required>
+                        <label class="form-label"><i class="bi bi-file-earmark-arrow-up me-1"></i>选择文件</label>
+                        <input type="file" name="file" class="form-control" id="fileInput" required>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">打印文件</button>
+                    <div class="mb-3 text-center" id="previewContainer" style="display:none;">
+                        <img id="filePreview" src="" class="img-fluid rounded border" style="max-height: 300px;">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 mb-3">
+                        <i class="bi bi-printer me-1"></i>打印文件
+                    </button>
                 </form>
-                <a href="/change_password" class="btn btn-warning mb-2">修改密码</a>
-                <a href="/setup_2fa" class="btn btn-secondary mb-2">设置2FA</a>
-                <a href="/redeem" class="btn btn-success mb-2">兑换码充值</a>
-                <a href="/history" class="btn btn-info">打印历史</a>
+                <script>
+                    document.getElementById('fileInput').addEventListener('change', function(e) {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        
+                        // 显示加载状态
+                        const previewContainer = document.getElementById('previewContainer');
+                        previewContainer.style.display = 'block';
+                        previewContainer.innerHTML = '<div class="text-center py-3"><div class="spinner-border text-primary" role="status"></div></div>';
+                        
+                        fetch('/preview', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.preview_url) {
+                                previewContainer.innerHTML = `<img id="filePreview" src="${data.preview_url}" class="img-fluid rounded border" style="max-height: 300px;">`;
+                            } else {
+                                previewContainer.innerHTML = '<div class="alert alert-warning">预览生成失败</div>';
+                            }
+                        })
+                        .catch(error => {
+                            previewContainer.innerHTML = '<div class="alert alert-danger">预览请求失败</div>';
+                        });
+                    });
+                </script>
+                <div class="d-grid gap-2">
+                    <a href="/change_password" class="btn btn-warning">
+                        <i class="bi bi-key me-1"></i>修改密码
+                    </a>
+                    <a href="/setup_2fa" class="btn btn-secondary">
+                        <i class="bi bi-shield-lock me-1"></i>设置2FA
+                    </a>
+                    <a href="/redeem" class="btn btn-success">
+                        <i class="bi bi-gift me-1"></i>兑换码充值
+                    </a>
+                    <a href="/history" class="btn btn-info">
+                        <i class="bi bi-clock-history me-1"></i>打印历史
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">
-                <h5>最近打印任务</h5>
+        <div class="card shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>最近打印任务</h5>
             </div>
             <div class="card-body">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>文件名</th>
-                            <th>页数</th>
-                            <th>费用</th>
-                            <th>时间</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for job in recent_jobs %}
-                        <tr>
-                            <td>{{ job.file_name }}</td>
-                            <td>{{ job.pages }}</td>
-                            <td>¥{{ "%.2f"|format(job.cost) }}</td>
-                            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th><i class="bi bi-file-earmark me-1"></i>文件名</th>
+                                <th><i class="bi bi-file-text me-1"></i>页数</th>
+                                <th><i class="bi bi-currency-yen me-1"></i>费用</th>
+                                <th><i class="bi bi-calendar me-1"></i>时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for job in recent_jobs %}
+                            <tr>
+                                <td>{{ job.file_name }}</td>
+                                <td>{{ job.pages }}</td>
+                                <td>¥{{ "%.2f"|format(job.cost) }}</td>
+                                <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
